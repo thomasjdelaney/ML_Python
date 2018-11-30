@@ -1,8 +1,9 @@
 """
 A script for adding noise to an image, then using Gibbs sampling to denoise it.
+	execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
 """
 import os
-execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
+execfile(os.path.join(os.environ['HOME'], '.pystartup'))
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.misc import imread, imsave
@@ -25,16 +26,7 @@ def addSaltNPepperNoise(im, prop):
     im2[index] = 1-im2[index]
     return im2
 
-def saveNoisyImages(image, prop, var_sigma, dir=image_dir):
-    pepe_gaussian = addGaussianNoise(image, prop, var_sigma)*255
-    pepe_gaussian_path = os.path.join(dir, 'dachshund_gaussian.jpg')
-    imsave(pepe_gaussian_path, pepe_gaussian)
-    pepe_noisy = addSaltNPepperNoise(image, prop)*255
-    pepe_noisy_path = os.path.join(dir, 'dachshund_noisy.jpg')
-    imsave(pepe_noisy_path, pepe_noisy)
-    return pepe_gaussian_path, pepe_noisy_path
-
-def neighbours(i,j,M,N,size=4):
+def getNeighbours(i,j,M,N,size=4):
     if size==4:
         if (i==0 and j==0):
             n=[(0,1), (1,0)]
@@ -54,10 +46,35 @@ def neighbours(i,j,M,N,size=4):
             n=[(i-1,N-1), (i+1,N-1), (i,N-2)]
         else:
             n=[(i-1,j), (i+1,j), (i,j-1), (i,j+1)]
-            return n
-        if size==8:
-            print('Not yet implemented\n')
-            return -1
+        return n
+    if size==8:
+        print('Not yet implemented\n')
+    	return -1
+
+def loadNoisyImage(file_name, dir=image_dir):
+	return imread(os.path.join(dir, file_name))/255.0
 
 original_image = imread(os.path.join(image_dir, 'dachshund_bw.jpg'))/255
-saveNoisyImages(original_image, 0.7, 0.1)
+gaussian_image = addGaussianNoise(original_image, 0.7, 0.1)
+noisy_image = addSaltNPepperNoise(original_image, 0.7)
+gaussian_path = os.path.join(image_dir, 'dachshund_gaussian.jpg')
+noisy_path = os.path.join(image_dir, 'dachshund_noisy.jpg')
+imsave(gaussian_path, gaussian_image*255)
+imsave(noisy_path, noisy_image*255)
+h = 0
+beta = 1.0
+eta = 2.1
+M,N = noisy_image.shape
+bias_plus = 0
+local_corr_plus = 0
+image_corr_plus = 0
+for m in range(0,M):
+	for n in range(0,N):
+		x_i = 1
+		neighbours = getNeighbours(m,n,M,N)
+		bias_plus += x_i
+		for (n_m, n_n) in neighbours:
+			neighbour_value = noisy_image[n_m, n_n]
+			local_corr_plus += x_i*neighbour_value
+		pixel_value = noisy_image[m,n]
+		image_corr_plus += x_i*pixel_value
