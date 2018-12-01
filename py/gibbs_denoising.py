@@ -2,14 +2,19 @@
 A script for adding noise to an image, then using Gibbs sampling to denoise it.
 	execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
 """
-import os
-execfile(os.path.join(os.environ['HOME'], '.pystartup'))
+import os, argparse
+execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.misc import imread, imsave
 
 root_dir = os.path.join(os.environ['HOME'], 'ML_Python')
 image_dir = os.path.join(root_dir, 'images')
+
+parser = argparse.ArgumentParser(description="For adding noise to an image, then denoising it using Gibbs sampling.")
+parser.add_argument('-p', '--proportion', help='The proportion of bits to add noise.', type=float, default=0.7)
+parser.add_argument('-v', '--noise_variance', help='variance for Gaussian noise', type=float, default=0.1)
+args = parser.parse_args()
 
 def addGaussianNoise(im, prop, varSigma):
     N = int(np.round(np.prod(im.shape)*prop))
@@ -54,27 +59,49 @@ def getNeighbours(i,j,M,N,size=4):
 def loadNoisyImage(file_name, dir=image_dir):
 	return imread(os.path.join(dir, file_name))/255.0
 
+def calcPixelEnergy(test_value, neighbours, pixel_value, noisy_image, h, beta, eta):
+	bias = test_value
+	local_corr = np.array([test_value * noisy_image[n_m, n_n] for (n_m, n_n) in neighbours]).sum()
+	image_corr = test_value * pixel_value
+	return h*bias - beta*local_corr - eta*image_corr
+
 original_image = imread(os.path.join(image_dir, 'dachshund_bw.jpg'))/255
-gaussian_image = addGaussianNoise(original_image, 0.7, 0.1)
-noisy_image = addSaltNPepperNoise(original_image, 0.7)
+gaussian_image = addGaussianNoise(original_image, args.proportion, args.noise_variance)
+noisy_image = addSaltNPepperNoise(original_image, args.proportion)
 gaussian_path = os.path.join(image_dir, 'dachshund_gaussian.jpg')
 noisy_path = os.path.join(image_dir, 'dachshund_noisy.jpg')
 imsave(gaussian_path, gaussian_image*255)
 imsave(noisy_path, noisy_image*255)
+rescaled_noisy = np.interp(noisy_image, (0, 1), (-1, 1))
 h = 0
 beta = 1.0
 eta = 2.1
-M,N = noisy_image.shape
-bias_plus = 0
-local_corr_plus = 0
-image_corr_plus = 0
-for m in range(0,M):
-	for n in range(0,N):
-		x_i = 1
-		neighbours = getNeighbours(m,n,M,N)
-		bias_plus += x_i
-		for (n_m, n_n) in neighbours:
-			neighbour_value = noisy_image[n_m, n_n]
-			local_corr_plus += x_i*neighbour_value
-		pixel_value = noisy_image[m,n]
-		image_corr_plus += x_i*pixel_value
+M, N = noisy_image.shape
+denoised_image = np.zeros((M, N), dtype=int)
+has_flips = True
+while has_flips:
+	has_flips = False
+	for m in range(0,M):
+		for n in range(0,N):
+			neighbours = getNeighbours(m,n,M,N)
+			pixel_value = rescaled_noisy[m, n]
+			energy_plus = calcPixelEnergy(1, neighbours, pixel_value, noisy_image, h, beta, eta)
+			energy_minus = calcPixelEnergy(-1, neighbours, pixel_value, noisy_image, h, beta, eta)
+			p_plus = np.exp(-energy_plus)
+			p_minus = np.exp(-energy_minus)
+			if (p_plus >= p_minus) & (denoised_image[m, n] == 0):
+				denoised_image[m, n] = 1
+				has_flips = True
+				print("Flipped: ["+str(m)+", "+str(n)+"]")
+			if (p_plus < p_minus) & (denoised_image[m, n] == 1):
+				denoised_image[m, n] = 0
+				has_flips = True
+				print("Flipped: ["+str(m)+", "+str(n)+"]")
+fig = plt.figure()
+ax = fig.add_subplot(131)
+ax.imshow(original_image, cmap='gray')
+ax = fig.add_subplot(132)
+ax.imshow(noisy_image, cmap='gray')
+ax = fig.add_subplot(133)
+ax.imshow(denoised_image, cmap='gray')
+plt.show(block=False)
