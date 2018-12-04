@@ -18,7 +18,6 @@ parser.add_argument('-v', '--noise_variance', help='Variance for Gaussian noise.
 parser.add_argument('-c', '--bias_coef', help='The coefficient for the bias energy term.', type=float, default=0.0)
 parser.add_argument('-l', '--local_coef', help='The coefficient of the local correlation energy term.', type=float, default=1.0)
 parser.add_argument('-i', '--image_coef', help='The coefficient of the image correlation energy term.', type=float, default=2.1)
-parser.add_argument('-t', '--num_iterations', help='The number of iterations to use.', type=int, default=10)
 parser.add_argument('-d', '--debug', help='Enter debug mode.', action='store_true', default=False)
 args = parser.parse_args()
 
@@ -88,8 +87,9 @@ def calcPixelEnergy(test_value, neighbours, pixel_value, noisy_image, h, beta, e
 	return h*bias - beta*local_corr - eta*image_corr
 
 def plotNoisyAndDenoised(num_passes, noisy_image, gaussian_image, denoised_noisy, denoised_gaussian):
+	fig = plt.figure()
 	ax = fig.add_subplot(221)
-	plt.title('Num Passes = ' + str(num_passes))
+	plt.title('Num passes = ' + str(num_passes))
 	ax.imshow(noisy_image, cmap='gray')
 	ax = fig.add_subplot(222)
 	ax.imshow(gaussian_image, cmap='gray')
@@ -97,38 +97,45 @@ def plotNoisyAndDenoised(num_passes, noisy_image, gaussian_image, denoised_noisy
 	ax.imshow(denoised_noisy, cmap='gray')
 	ax = fig.add_subplot(224)
 	ax.imshow(denoised_gaussian, cmap='gray')
-
-def getPermutedIndices(image_shape):
-	return np.array(np.unravel_index(np.random.permutation(np.prod(image_shape)), image_shape)).T
+	plt.show(block=False)
 
 def main():
 	original_image, gaussian_image, noisy_image = getNoisyImages(args.picture_file, image_dir, args.proportion, args.noise_variance)
 	rescaled_gaussian, rescaled_noisy = getRescaledImages(gaussian_image, noisy_image)
 	M, N = noisy_image.shape
-	denoised_noisy = rescaled_noisy
-	denoised_gaussian = rescaled_gaussian
-	fig = plt.figure()
-	for t in range(0,args.num_interations):
-		permuted_indices = getPermutedIndices(original_image.shape)
-		for (m,n) in permuted_indices:
-			neighbours = getNeighbours(m, n, M, N)
-			uniform_sample = np.random.uniform(size=1)[0]
-			gaussian_pixel_value = denoised_gaussian[m, n]
-			noisy_pixel_value = denoised_noisy[m, n]
-			gaussian_energy_plus = calcPixelEnergy(1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
-			gaussian_energy_minus = calcPixelEnergy(-1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
-			noisy_energy_plus = calcPixelEnergy(1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
-			noisy_energy_minus = calcPixelEnergy(-1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
-			gaussian_p_plus = np.exp(-gaussian_energy_plus)
-			gaussian_p_minus = np.exp(-gaussian_energy_minus)
-			noisy_p_plus = np.exp(-noisy_energy_plus)
-			noisy_p_minus = np.exp(-noisy_energy_minus)
-			gaussian_p = gaussian_p_plus/(gaussian_p_plus + gaussian_p_minus)
-			noisy_p = noisy_p_plus/(noisy_p_plus + noisy_p_minus)
-			denoised_gaussian[m, n] = 1 if gaussian_p > uniform_sample else 0
-			denoised_noisy[m, n] = 1 if noisy_p > uniform_sample else 0
-		plotNoisyAndDenoised(t+1, noisy_image, gaussian_image, denoised_noisy, denoised_gaussian)
-		plt.pause(0.05)
+	denoised_noisy = np.zeros((M, N), dtype=int)
+	denoised_gaussian = np.zeros((M, N), dtype=int)
+	has_flips = True
+	num_passes = 0
+	while has_flips:
+		has_flips = False
+		for m in range(0, M):
+			for n in range(0, N):
+				neighbours = getNeighbours(m, n, M, N)
+				gaussian_pixel_value = rescaled_gaussian[m, n]
+				noisy_pixel_value = rescaled_noisy[m, n]
+				gaussian_energy_plus = calcPixelEnergy(1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
+				gaussian_energy_minus = calcPixelEnergy(-1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
+				noisy_energy_plus = calcPixelEnergy(1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
+				noisy_energy_minus = calcPixelEnergy(-1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
+				gaussian_p_plus = np.exp(-gaussian_energy_plus)
+				gaussian_p_minus = np.exp(-gaussian_energy_minus)
+				noisy_p_plus = np.exp(-noisy_energy_plus)
+				noisy_p_minus = np.exp(-noisy_energy_minus)
+				if (gaussian_p_plus >= gaussian_p_minus) & (denoised_gaussian[m, n] == 0):
+					denoised_gaussian[m, n] = 1
+					has_flips = True
+				if (gaussian_p_plus < gaussian_p_minus) & (denoised_gaussian[m, n] == 1):
+					denoised_gaussian[m, n] = 0
+					has_flips = True
+				if (noisy_p_plus >= noisy_p_minus) & (denoised_noisy[m, n] == 0):
+					denoised_noisy[m, n] = 1
+					has_flips = True
+				if (noisy_p_plus < noisy_p_minus) & (denoised_noisy[m, n] == 1):
+					denoised_noisy[m, n] = 0
+					has_flips = True
+		num_passes += 1
+	plotNoisyAndDenoised(num_passes, noisy_image, gaussian_image, denoised_noisy, denoised_gaussian)
 
 if not(args.debug):
 	main()

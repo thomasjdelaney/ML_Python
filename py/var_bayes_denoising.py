@@ -1,12 +1,14 @@
 """
-A script for adding noise to an image, then using Gibbs sampling to denoise it.
+A script for adding noise to an image, then using variational Bayes to denoise it.
 	execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
 """
 import os, argparse
 execfile(os.path.join(os.environ['HOME'], '.pythonrc'))
 import numpy as np
+import itertools as it
 import matplotlib.pyplot as plt
 from scipy.misc import imread, imsave
+from scipy.special import expit
 
 root_dir = os.path.join(os.environ['HOME'], 'ML_Python')
 image_dir = os.path.join(root_dir, 'images')
@@ -15,9 +17,6 @@ parser = argparse.ArgumentParser(description="For adding noise to an image, then
 parser.add_argument('-f', '--picture_file', help='The picture to which to add noise.', type=str, default='dachshund_bw.jpg')
 parser.add_argument('-p', '--proportion', help='The proportion of bits to add noise.', type=float, default=0.7)
 parser.add_argument('-v', '--noise_variance', help='Variance for Gaussian noise.', type=float, default=0.1)
-parser.add_argument('-c', '--bias_coef', help='The coefficient for the bias energy term.', type=float, default=0.0)
-parser.add_argument('-l', '--local_coef', help='The coefficient of the local correlation energy term.', type=float, default=1.0)
-parser.add_argument('-i', '--image_coef', help='The coefficient of the image correlation energy term.', type=float, default=2.1)
 parser.add_argument('-t', '--num_iterations', help='The number of iterations to use.', type=int, default=10)
 parser.add_argument('-d', '--debug', help='Enter debug mode.', action='store_true', default=False)
 args = parser.parse_args()
@@ -73,19 +72,13 @@ def getNeighbours(i,j,M,N,size=4):
             n=[(i-1,N-1), (i+1,N-1), (i,N-2)]
         else:
             n=[(i-1,j), (i+1,j), (i,j-1), (i,j+1)]
-        return n
+        return np.array(n)
     if size==8:
         print('Not yet implemented\n')
     	return -1
 
 def loadNoisyImage(file_name, dir=image_dir):
 	return imread(os.path.join(dir, file_name))/255.0
-
-def calcPixelEnergy(test_value, neighbours, pixel_value, noisy_image, h, beta, eta):
-	bias = test_value
-	local_corr = np.array([test_value * noisy_image[n_m, n_n] for (n_m, n_n) in neighbours]).sum()
-	image_corr = test_value * pixel_value
-	return h*bias - beta*local_corr - eta*image_corr
 
 def plotNoisyAndDenoised(num_passes, noisy_image, gaussian_image, denoised_noisy, denoised_gaussian):
 	ax = fig.add_subplot(221)
@@ -101,32 +94,33 @@ def plotNoisyAndDenoised(num_passes, noisy_image, gaussian_image, denoised_noisy
 def getPermutedIndices(image_shape):
 	return np.array(np.unravel_index(np.random.permutation(np.prod(image_shape)), image_shape)).T
 
+def getComputeParam(m, n, M, N, mus):
+	neighbours = getNeighbours(m, n, M, N)
+	return mus[neighbours[:,0], neighbours[:,1]].sum()
+
+def imageCorrelation(x_i, y_i): return x_i * y_i
+
+def corrDifference(pixel_value):
+	return 0.5*(imageCorrelation(1, pixel_value) - imageCorrelation(-1, pixel_value))
+
+def getVariationalParam(compute_param, pixel_value):
+	return np.tanh(compute_param + corrDifference(pixel_value))
+
 def main():
 	original_image, gaussian_image, noisy_image = getNoisyImages(args.picture_file, image_dir, args.proportion, args.noise_variance)
 	rescaled_gaussian, rescaled_noisy = getRescaledImages(gaussian_image, noisy_image)
 	M, N = noisy_image.shape
+	mus = np.random.uniform(-1, 1, size=(M, N))
 	denoised_noisy = rescaled_noisy
 	denoised_gaussian = rescaled_gaussian
 	fig = plt.figure()
-	for t in range(0,args.num_interations):
-		permuted_indices = getPermutedIndices(original_image.shape)
-		for (m,n) in permuted_indices:
-			neighbours = getNeighbours(m, n, M, N)
-			uniform_sample = np.random.uniform(size=1)[0]
+	for t in range(0,args.num_iterations):
+		for m,n in it.product(range(M), range(N)):
 			gaussian_pixel_value = denoised_gaussian[m, n]
-			noisy_pixel_value = denoised_noisy[m, n]
-			gaussian_energy_plus = calcPixelEnergy(1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
-			gaussian_energy_minus = calcPixelEnergy(-1, neighbours, gaussian_pixel_value, gaussian_image, args.bias_coef, args.local_coef, args.image_coef)
-			noisy_energy_plus = calcPixelEnergy(1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
-			noisy_energy_minus = calcPixelEnergy(-1, neighbours, noisy_pixel_value, noisy_image, args.bias_coef, args.local_coef, args.image_coef)
-			gaussian_p_plus = np.exp(-gaussian_energy_plus)
-			gaussian_p_minus = np.exp(-gaussian_energy_minus)
-			noisy_p_plus = np.exp(-noisy_energy_plus)
-			noisy_p_minus = np.exp(-noisy_energy_minus)
-			gaussian_p = gaussian_p_plus/(gaussian_p_plus + gaussian_p_minus)
-			noisy_p = noisy_p_plus/(noisy_p_plus + noisy_p_minus)
-			denoised_gaussian[m, n] = 1 if gaussian_p > uniform_sample else 0
-			denoised_noisy[m, n] = 1 if noisy_p > uniform_sample else 0
+			compute_param = getComputeParam(m, n, M, N, mus)
+			variational_param = getVariationalParam(compute_param, gaussian_pixel_value)
+			mus[m, n] = variational_param
+			denoised_gaussian[m, n] = expit(2*(getComputeParam(m, n, M, N, mus) + corrDifference(gaussian_pixel_value)))
 		plotNoisyAndDenoised(t+1, noisy_image, gaussian_image, denoised_noisy, denoised_gaussian)
 		plt.pause(0.05)
 
